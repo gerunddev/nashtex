@@ -15,22 +15,27 @@
 \DeclareOption{letterpaper}{\renewcommand\nns@paper{letterpaper}}
 \DeclareOption{a4}{\renewcommand\nns@paper{a4paper}}
 \DeclareOption{a4paper}{\renewcommand\nns@paper{a4paper}}
+\newif\ifnns@twocol \nns@twocoltrue
+\DeclareOption{onecolumn}{\nns@twocolfalse}
+\DeclareOption{twocolumn}{\nns@twocoltrue}
 \DeclareOption*{\PassOptionsToClass{\CurrentOption}{article}}
 \ProcessOptions\relax
 \LoadClass[11pt]{article}
 
-\RequirePackage[\nns@paper,margin=0.75in]{geometry}
+\RequirePackage[\nns@paper,margin=0.75in,top=0.5in,bottom=0.5in,
+  includeheadfoot,headheight=14pt,headsep=12pt,footskip=24pt]{geometry}
 \RequirePackage{fontspec}
 \RequirePackage{graphicx}
 \RequirePackage{xcolor}
+\RequirePackage{multicol}
 \RequirePackage{tikz}
 \usetikzlibrary{calc,shapes.geometric}
 
 \directlua{nns = require("nns")}
 
-\pagestyle{empty}
 \setlength\parindent{0pt}
 \setlength\parskip{0pt}
+\setlength\lineskip{5pt}% clearance between chord rows
 
 % ---- fonts ----------------------------------------------------------------
 \setmainfont{lmsans10-regular.otf}[
@@ -59,16 +64,18 @@
 \newcommand\nnsSup[1]{\raisebox{0.42em}{\scalebox{0.58}{#1}}}
 \newcommand\nnsSlash[1]{/#1}
 \newcommand\nnsPush{\raisebox{0.15em}{\scalebox{0.75}{<}}\kern0.05em}
-\newcommand\nnsRest{\scalebox{1.1}{\nns@smufl{E4E5}}}
+\newcommand\nnsRest{\raisebox{0.36em}{\scalebox{1.1}{\nns@smufl{E4E5}}}}
+\newcommand\nnsTickBox{}
 \newcommand\nnsAccentGlyph{\scalebox{1.6}{\nns@smufl{E4AC}}}
 \newcommand\nnsNoteGlyph{\raisebox{0.1em}{\scalebox{0.9}{\nns@smufl{ECA5}}}}
 
 % ---- TikZ styles for the grid ---------------------------------------------
 \tikzset{
   nnsrow/.style={line cap=butt},
-  nnschord/.style={inner sep=1pt,font=\nnsChordFont},
-  nnsglyph/.style={inner sep=1pt,font=\nnsChordFont},
-  nnstick/.style={inner sep=0pt,minimum width=8pt,minimum height=14pt},
+  nnschord/.style={inner sep=1pt,anchor=base west,font=\nnsChordFont},
+  nnsglyph/.style={inner sep=1pt,anchor=base west,font=\nnsChordFont},
+  nnstick/.style={inner sep=0pt,anchor=base west,minimum width=10pt,minimum height=0pt},
+  nnssign/.style={inner sep=0pt,minimum height=0pt,anchor=base west},
   nnstickline/.style={line width=1.6pt,line cap=round},
   nnsunder/.style={line width=1.3pt},
   nnsbracket/.style={line width=1pt},
@@ -91,6 +98,7 @@
 % ---- settings -------------------------------------------------------------
 \newcommand\nns@title{Untitled}
 \newcommand\nns@artist{}
+\newcommand\nns@book{}
 \newcommand\nns@tempo{}
 \newcommand\nns@time{}
 \newcommand\nns@feel{}
@@ -100,6 +108,7 @@
   barsperrow/.store in=\nns@barsperrow,
   title/.store in=\nns@title,
   artist/.store in=\nns@artist,
+  book/.store in=\nns@book,
   tempo/.store in=\nns@tempo,
   time/.store in=\nns@time,
   feel/.store in=\nns@feel,
@@ -110,41 +119,65 @@
 \newcommand\nnsset[1]{\pgfkeys{/nns,#1}}
 \newcommand\songinfo[1]{\nnsset{#1}}
 
-% ---- header ---------------------------------------------------------------
+% ---- header and footer ----------------------------------------------------
+% Songbook style: small running head (book name left, key/tempo/time/feel
+% right) over a rule, a left-aligned bold title, and a footer rule with the
+% title left and the artist right.
 \newif\ifnns@firstmeta
 \newcommand\nnsMetaItem[1]{%
-  \ifnns@firstmeta\nns@firstmetafalse\else\quad·\quad\fi#1}
+  \ifnns@firstmeta\nns@firstmetafalse\else\enspace·\enspace\fi#1}
+\newcommand\nns@meta{%
+  \nns@firstmetatrue
+  \ifx\nns@keylabel\@empty\else\nnsMetaItem{Key: \nns@keylabel}\fi
+  \ifx\nns@tempo\@empty\else\nnsMetaItem{\nnsNoteGlyph\,=\,\nns@tempo}\fi
+  \ifx\nns@time\@empty\else\nnsMetaItem{\nns@time}\fi
+  \ifx\nns@feel\@empty\else\nnsMetaItem{\nns@feel}\fi}
+\newcommand\nns@ruled[2]{% #1 above the rule (head) or #2 below it (foot)
+  \parbox[b]{\textwidth}{\footnotesize#1\ifx\relax#1\relax\else\par\vspace{2pt}\fi
+    \hrule height 0.6pt
+    \ifx\relax#2\relax\else\vspace{2pt}#2\fi}}
+\def\ps@nns{%
+  \def\@oddhead{\nns@ruled{\nns@book\hfill\nns@meta}{}}%
+  \def\@oddfoot{\nns@ruled{}{\nns@title\hfill\nns@artist}}%
+  \let\@evenhead\@oddhead\let\@evenfoot\@oddfoot}
+\pagestyle{nns}
 \newcommand\nns@header{%
-  \begin{center}
-    {\fontsize{24}{28}\selectfont\bfseries\nns@title\par}
-    \ifx\nns@artist\@empty\else\vspace{3pt}{\large\nns@artist\par}\fi
-    \vspace{6pt}
-    {\large\nns@firstmetatrue
-     \directlua{nns.print_key_label("Key: ")}%
-     \ifx\nns@tempo\@empty\else\nnsMetaItem{\nnsNoteGlyph\,=\,\nns@tempo}\fi
-     \ifx\nns@time\@empty\else\nnsMetaItem{\nns@time}\fi
-     \ifx\nns@feel\@empty\else\nnsMetaItem{\nns@feel}\fi
-     \par}
-  \end{center}
-  \vspace{-6pt}\noindent\rule{\linewidth}{0.6pt}\par\vspace{6pt}}
-\AtBeginDocument{\nns@header}
+  {\noindent\fontsize{17}{20}\selectfont\bfseries\nns@title\par}\vspace{2pt}}
+% The title spans the page; the chart below it is set in two columns
+% (class option `onecolumn' turns that off).
+\setlength\columnsep{24pt}
+\AtBeginDocument{\directlua{nns.store_key_label()}\nns@header
+  \ifnns@twocol\begin{multicols}{2}\raggedcolumns\fi}
+\AtEndDocument{\ifnns@twocol\end{multicols}\fi}
 
 % ---- song structure -------------------------------------------------------
 % \begin{section}{Verse} ... \end{section}
 \let\section\relax
 \let\endsection\relax
+% A section is kept in one piece (a minipage) so it never splits across
+% columns or pages.
 \newenvironment{section}[1]{%
   \par\addvspace{10pt}%
+  \noindent\begin{minipage}{\linewidth}%
   \noindent\tikz[baseline=(l.base)]\node[nnssection](l){#1};\par
-  \nobreak\vspace{2pt}\nobreak
+  \vspace{2pt}%
   \directlua{nns.begin_section("\luaescapestring{\detokenize{#1}}")}%
-}{\par}
+}{\par\end{minipage}\par}
 
 % \bars[barsperrow=8]{ | 1 | 4 . 5 | <6m | 4 | }
 \NewDocumentCommand\bars{O{}m}{%
   \begingroup\nnsset{#1}%
   \directlua{nns.bars("\luaescapestring{\detokenize{#2}}", "\nns@barsperrow")}%
   \endgroup}
+
+% Each row of chords is a TikZ picture at its natural width, left-aligned;
+% a row too wide for the line is scaled down to fit.
+\newsavebox\nns@rowbox
+\newcommand\nnsRowBegin{\par\noindent\begin{lrbox}{\nns@rowbox}}
+\newcommand\nnsRowEnd{\end{lrbox}%
+  \ifdim\wd\nns@rowbox>\linewidth
+    \resizebox{\linewidth}{!}{\usebox\nns@rowbox}%
+  \else\usebox\nns@rowbox\fi\par}
 
 % \keychange{A}
 \newcommand\keychange[1]{%

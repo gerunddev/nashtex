@@ -19,18 +19,21 @@ M.state = {
 }
 
 ---------------------------------------------------------------------------
--- Geometry (TikZ units: x = one bar cell, y = 10pt)
----------------------------------------------------------------------------
+-- Geometry (pt). There are no barlines: every chord is a measure, measures
+-- sit side by side at their natural width like words, and chords sharing a
+-- measure are packed tighter and underlined.
 
-local ROW_H    = 4.2  -- row height
-local CHORD_Y  = 2.1  -- vertical centre of chords
-local UNDER_Y  = 0.75 -- underline / split-bracket height
-local BAR_LO   = 0.5  -- barline extent
-local BAR_HI   = 3.7
-local END_LO   = 4.0  -- ending bracket extent
-local END_HI   = 5.2
-local END_ROOM = 1.4  -- extra height reserved for rows with endings
-local PAD      = 0.08 -- inset of the first/last item from the barlines
+local BASE        = 10 -- chord baseline
+local ROW_H       = 32 -- minimum row height
+local UNDER_Y     = 4  -- underline / split-bracket height
+local MARK_LO     = 5  -- repeat-sign extent
+local MARK_HI     = 28
+local END_LO      = 37 -- ending bracket extent (clears diamonds and marks)
+local END_HI      = 49
+local MEASURE_GAP = 17 -- between measures
+local SPLIT_GAP   = 6  -- between chords (or ticks) within one measure
+local SIGN_GAP    = 5  -- around repeat signs
+local DIAMOND_PAD = 9  -- extra room on each side of a diamond
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -115,9 +118,10 @@ function M.set_key(s)
   M.state.key, M.state.key_src = k, s
 end
 
--- Prints "<prefix><key>" for the page header, or nothing when no key is set.
-function M.print_key_label(prefix)
-  if M.state.key then out("\\nnsMetaItem{" .. prefix .. key_label(M.state.key) .. "}") end
+-- Defines \nns@keylabel (globally) as the current key, typeset, or empty.
+-- Called once at \begin{document} so the running head keeps the song's key.
+function M.store_key_label()
+  token.set_macro("nns@keylabel", M.state.key and key_label(M.state.key) or "", "global")
 end
 
 function M.keychange(s)
@@ -240,14 +244,14 @@ end
 
 M.marks = {
   { name = "rest", pattern = "^r$", kind = "item",
-    draw = function(id, x, y)
-      return string.format("\\node[nnsglyph] (%s) at (%s,%s) {\\nnsRest};", id, num(x), num(y))
+    draw = function(id, at)
+      return string.format("\\node[nnsglyph] (%s) at %s {\\nnsRest};", id, at)
     end },
 
   { name = "tick", pattern = "^/$", kind = "item",
-    draw = function(id, x, y)
-      return string.format("\\node[nnstick] (%s) at (%s,%s) {};", id, num(x), num(y))
-        .. string.format("\\draw[nnstickline] ([shift={(-3pt,-7pt)}]%s.center) -- ([shift={(3pt,7pt)}]%s.center);", id, id)
+    draw = function(id, at)
+      return string.format("\\node[nnstick] (%s) at %s {\\nnsTickBox};", id, at)
+        .. string.format("\\draw[nnstickline] ([shift={(1.5pt,1pt)}]%s.base west) -- ++(7pt,14pt);", id)
     end },
 
   { name = "diamond", pattern = "^\\diamond$", suffix = "*", kind = "mod", stacks = false,
@@ -424,38 +428,9 @@ end
 -- Renderer
 ---------------------------------------------------------------------------
 
-local function barline(x, style, side)
-  local X = num(x)
-  local function line(dx, st)
-    return string.format("\\draw[%s] ([xshift=%spt]%s,%s) -- ([xshift=%spt]%s,%s);",
-      st, num(dx), X, num(BAR_LO), num(dx), X, num(BAR_HI))
-  end
-  local function dots(dx)
-    local s = ""
-    for _, dy in ipairs { -3.5, 3.5 } do
-      s = s .. string.format("\\fill ([shift={(%spt,%spt)}]%s,%s) circle[radius=1.3pt];",
-        num(dx), num(dy), X, num(CHORD_Y))
-    end
-    return s
-  end
-  if style == "repeat-start" and side ~= "right" then
-    return line(1, "nnsthickbar") .. line(4.5, "nnsbarline") .. dots(8)
-  elseif style == "repeat-end" and side ~= "left" then
-    return dots(-8) .. line(-4.5, "nnsbarline") .. line(-1, "nnsthickbar")
-  elseif style == "repeat-both" then
-    local s = ""
-    if side ~= "left" then s = s .. dots(-6) .. line(-2.5, "nnsbarline") end
-    if side ~= "right" then s = s .. line(2.5, "nnsbarline") .. dots(6) end
-    return s
-  elseif style == "double" then
-    if side == "right" then return line(-3, "nnsbarline") .. line(-0.3, "nnsbarline") end
-    if side == "left" then return line(0.3, "nnsbarline") .. line(3, "nnsbarline") end
-    return line(-1.5, "nnsbarline") .. line(1.5, "nnsbarline")
-  end
-  return line(0, "nnsbarline")
-end
+local function pt(v) return num(v) .. "pt" end
 
-local function emit_row(row, per, rowstart, spans)
+local function emit_row(row, rowstart, spans)
   local k = #row
   local first, last = rowstart, rowstart + k - 1
 
@@ -464,38 +439,80 @@ local function emit_row(row, per, rowstart, spans)
     if sp.to >= first and sp.from <= last then has_ending = true end
   end
 
-  out("\\par\\noindent\\begin{tikzpicture}[x=" .. num(1 / per) .. "\\linewidth,y=10pt,nnsrow]")
-  out(string.format("\\useasboundingbox (0,0) rectangle (%d,%s);", per,
-    num(ROW_H + (has_ending and END_ROOM or 0))))
-  out(string.format("\\coordinate (nnsU) at (0,%s);", num(UNDER_Y)))
+  out("\\nnsRowBegin\\begin{tikzpicture}[nnsrow]")
+  out(string.format("\\path (0,0) rectangle (0,%s);", pt(ROW_H + (has_ending and END_HI - ROW_H + 2 or 0))))
+  out(string.format("\\coordinate (nnsU) at (0,%s);", pt(UNDER_Y)))
+  out(string.format("\\coordinate (nnsEL) at (0,%s);", pt(END_LO)))
+  out(string.format("\\coordinate (nnsEH) at (0,%s);", pt(END_HI)))
 
-  -- barlines
-  out(barline(0, row[1].left, "left"))
-  for j = 1, k - 1 do out(barline(j, row[j].right, "mid")) end
-  out(barline(k, row[k].right, "right"))
+  -- Everything is placed left to right: each element is anchored at its
+  -- base west, `gap` points after the previous element's base east.
+  local prev, nsigns = nil, 0
+  local function at(gap)
+    if prev then return string.format("([xshift=%s]%s.base east)", pt(gap), prev) end
+    return string.format("(%s,%s)", pt(0), pt(BASE))
+  end
 
-  -- contents
+  -- Repeat and double-bar signs: an empty node of fixed width, drawn into.
+  local function sign(kind, gap)
+    nsigns = nsigns + 1
+    local id = "nnsS" .. nsigns
+    local w = kind == "double" and 4 or 9
+    out(string.format("\\node[nnssign,minimum width=%s] (%s) at %s {};", pt(w), id, at(gap)))
+    local function line(dx, style)
+      return string.format("\\draw[%s] ([shift={(%s,%s)}]%s.base west) -- ++(0,%s);",
+        style, pt(dx), pt(MARK_LO - BASE), id, pt(MARK_HI - MARK_LO))
+    end
+    local function dots(dx)
+      local mid = (MARK_LO + MARK_HI) / 2 - BASE
+      return string.format("\\fill ([shift={(%s,%s)}]%s.base west) circle[radius=1.3pt];", pt(dx), pt(mid - 4), id)
+        .. string.format("\\fill ([shift={(%s,%s)}]%s.base west) circle[radius=1.3pt];", pt(dx), pt(mid + 4), id)
+    end
+    if kind == "start" then out(line(1, "nnsthickbar") .. line(4.5, "nnsbarline") .. dots(7.7))
+    elseif kind == "end" then out(dots(1.3) .. line(4.5, "nnsbarline") .. line(8, "nnsthickbar"))
+    else out(line(0.5, "nnsbarline") .. line(3.5, "nnsbarline")) end
+    prev = id
+    return id
+  end
+
+  local measures = {}
+  local gap = 0
   for j, b in ipairs(row) do
-    local n = #b.items
-    local chords = 0
+    local m = {}
+    measures[j] = m
+    local opens = (j == 1) and b.left or row[j - 1].right
+    if opens == "repeat-start" or opens == "repeat-both" then
+      m.first = sign("start", gap)
+      gap = SIGN_GAP
+    end
+
+    local chords, n, pad = 0, #b.items, 0
     for i, it in ipairs(b.items) do
       local id = string.format("nns%d-%d", j, i)
       it.id = id
-      local x = (j - 1) + PAD + (1 - 2 * PAD) * (i - 0.5) / n
+      pad = 0
+      if it.kind == "chord" then
+        for _, md in ipairs(it.mods) do if md.name == "diamond" then pad = DIAMOND_PAD end end
+      end
+      local here = at(gap + pad)
       if it.kind == "chord" then
         chords = chords + 1
-        out(string.format("\\node[nnschord] (%s) at (%s,%s) {%s};", id, num(x), num(CHORD_Y), chord_tex(it)))
+        out(string.format("\\node[nnschord] (%s) at %s {%s};", id, here, chord_tex(it)))
         local stacked = 0
-        for _, m in ipairs(it.mods) do
-          out(m.draw(id, stacked))
-          if m.stacks then stacked = stacked + 1 end
+        for _, md in ipairs(it.mods) do
+          out(md.draw(id, stacked))
+          if md.stacks then stacked = stacked + 1 end
         end
       else
-        out(it.mark.draw(id, x, CHORD_Y))
+        out(it.mark.draw(id, here))
       end
+      prev = id
+      if not m.first then m.first, m.firstpad = id, pad end
+      gap = SPLIT_GAP + pad
     end
+    m.last = prev
 
-    -- split bars: brackets for [ ] groups, otherwise underline >1 chord
+    -- split measures: brackets for [ ] groups, otherwise underline >1 chord
     if #b.groups > 0 then
       for _, g in ipairs(b.groups) do
         out(string.format("\\draw[nnsbracket] (%s.west |- nnsU) ++(0,4pt) |- (%s.east |- nnsU) -- ++(0,4pt);",
@@ -505,25 +522,36 @@ local function emit_row(row, per, rowstart, spans)
       out(string.format("\\draw[nnsunder] (%s.west |- nnsU) -- (%s.east |- nnsU);",
         b.items[1].id, b.items[n].id))
     end
+
+    gap = gap - SPLIT_GAP + MEASURE_GAP
+    if b.right == "repeat-end" or b.right == "repeat-both" then
+      m.last = sign("end", SIGN_GAP + pad)
+      gap = MEASURE_GAP
+    elseif b.right == "double" then
+      m.last = sign("double", SIGN_GAP + 1 + pad)
+      gap = MEASURE_GAP
+    end
   end
 
-  -- endings
+  -- endings: bracket over the measures they cover
   for _, sp in ipairs(spans) do
     if sp.to >= first and sp.from <= last then
-      local a = math.max(sp.from, first) - first
-      local z = math.min(sp.to, last) - first + 1
       local starts, ends = sp.from >= first, sp.to <= last
-      local p = string.format("([xshift=3pt]%d,%s)", a, num(starts and END_LO or END_HI))
-      p = p .. string.format(" -- ([xshift=3pt]%d,%s) -- ([xshift=-3pt]%d,%s)", a, num(END_HI), z, num(END_HI))
-      if ends and sp.closed then p = p .. string.format(" -- ([xshift=-3pt]%d,%s)", z, num(END_LO)) end
+      local fm = measures[sp.from - first + 1]
+      local a = starts and string.format("([xshift=%s]%s.west |- nnsEL)", pt(-3 - (fm.firstpad or 0)), fm.first)
+                       or string.format("(0,%s)", pt(END_LO))
+      local zid = measures[math.min(sp.to, last) - first + 1].last
+      local p = a .. string.format(" |- ([xshift=3pt]%s.east |- nnsEH)", zid)
+      if ends and sp.closed then p = p .. " -- ++(0," .. pt(END_LO - END_HI) .. ")" end
       out("\\draw[nnsending] " .. p .. ";")
       if starts then
-        out(string.format("\\node[nnsendinglabel] at ([xshift=5pt]%d,%s) {%d.};", a, num(END_HI), sp.n))
+        out(string.format("\\node[nnsendinglabel] at ([xshift=%s]%s.west |- nnsEH) {%d.};",
+          pt(-1 - (fm.firstpad or 0)), fm.first, sp.n))
       end
     end
   end
 
-  out("\\end{tikzpicture}\\par")
+  out("\\end{tikzpicture}\\nnsRowEnd")
 end
 
 function M.begin_section(name)
@@ -539,7 +567,7 @@ function M.bars(src, per)
   for r = 1, #bars, per do
     local row = {}
     for j = r, math.min(r + per - 1, #bars) do row[#row + 1] = bars[j] end
-    emit_row(row, per, r, spans)
+    emit_row(row, r, spans)
   end
   M.state.bar = M.state.bar + #bars
 end

@@ -42,7 +42,7 @@ directly (`src/bin/nns build hello`, `src/bin/nns help`).
 ## Song format
 
 ```latex
-\documentclass{nnschart}          % [a4] for A4; Letter is the default
+\documentclass{nnschart}          % options: a4 (default Letter), onecolumn
 \songinfo{title={Name of Song}, key=G, tempo=92, time=4/4}
 \begin{document}
 \begin{section}{Verse}
@@ -50,13 +50,18 @@ directly (`src/bin/nns build hello`, `src/bin/nns help`).
 \end{section}
 \keychange{A}
 \begin{section}{Chorus}
-  \bars[barsperrow=8]{ |: 1 | <4 | [1. 5 | 1* :|[2. 5 | 1 || }
+  \bars{ |: 1 | <4 | [1. 5 | 1* :|[2. 5 | 1 || }
 \end{section}
 \end{document}
 ```
 
-`\songinfo` also takes `artist=` and `feel=`. `\nnsset{barsperrow=N}` changes
-the default of 4 bars per row for the whole song.
+There are no measure lines: each chord is a measure, measures are spaced like
+words, and chords that share a measure sit closer together and are
+underlined. Each line holds `barsperrow` measures (default 4).
+
+`\songinfo` also takes `artist=` (shown in the footer), `feel=`, and `book=`
+(a songbook name for the running head). `\nnsset{barsperrow=N}` changes
+the number of measures per line for the whole song.
 
 ## Notation
 
@@ -72,7 +77,7 @@ the default of 4 bars per row for the whole song.
 | Rest | `r` | |
 | Stop / accent | `5!` or `5 !`, `4^` or `4 ^` | |
 | Mute | `1 \mute` | Triangle above the chord |
-| Bars | `\|` `\|\|` `\|:` `:\|` `:\|:` | |
+| Measures | `\|` separates measures and is not drawn; `\|\|` `\|:` `:\|` `:\|:` draw double bars and repeats | |
 | Endings | `[1.` `[2.` right after a barline | Ends at `:\|`, `\|\|`, the next ending, or the end of the string |
 | Section | `\begin{section}{Verse}` | |
 | Key change | `\keychange{A}` | |
