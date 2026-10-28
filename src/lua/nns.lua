@@ -1,0 +1,553 @@
+-- nns.lua: Nashville Number System bar-string parser and renderer.
+--
+-- \bars{...} hands its (detokenized) argument to nns.bars(). The string is
+-- lexed, parsed into structured bars (chords as degree/accidental/quality/
+-- bass), and emitted as one TikZ picture per row of the grid.
+
+local M = {}
+
+M.config = {
+  letters = os.getenv("NNS_LETTERS") == "1",
+  debug = os.getenv("NNS_DEBUG") == "1", -- echo generated TikZ to the log
+}
+
+M.state = {
+  section = "(no section)",
+  bar = 0,       -- bars emitted so far in the current section
+  key = nil,     -- parsed key, see parse_key()
+  key_src = nil, -- key as written
+}
+
+---------------------------------------------------------------------------
+-- Geometry (TikZ units: x = one bar cell, y = 10pt)
+---------------------------------------------------------------------------
+
+local ROW_H    = 4.2  -- row height
+local CHORD_Y  = 2.1  -- vertical centre of chords
+local UNDER_Y  = 0.75 -- underline / split-bracket height
+local BAR_LO   = 0.5  -- barline extent
+local BAR_HI   = 3.7
+local END_LO   = 4.0  -- ending bracket extent
+local END_HI   = 5.2
+local END_ROOM = 1.4  -- extra height reserved for rows with endings
+local PAD      = 0.08 -- inset of the first/last item from the barlines
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+
+local CT_ATLETTER = luatexbase and luatexbase.registernumber("catcodetable@atletter")
+
+local function out(s)
+  if M.config.debug then texio.write_nl("log", "nns> " .. s) end
+  if CT_ATLETTER then tex.print(CT_ATLETTER, s) else tex.print(s) end
+end
+
+local function num(x)
+  return (string.format("%.4f", x):gsub("0+$", ""):gsub("%.$", ""))
+end
+
+local function report(barno, fmt, ...)
+  local msg = string.format(fmt, ...)
+  tex.error(string.format("nns: %s in bar %d of section '%s'", msg, barno, M.state.section), {
+    "The \\bars string could not be understood. See README.md for the",
+    "notation (chords like 1 4 5 6m b7 5/7, marks like < * ! ^ r /).",
+  })
+end
+
+local ACC_OFFSET = { [""] = 0, b = -1, ["#"] = 1 }
+
+local ACC_TEX = {
+  [-2] = "\\nnsDoubleFlat{}",
+  [-1] = "\\nnsFlat{}",
+  [0]  = "",
+  [1]  = "\\nnsSharp{}",
+  [2]  = "\\nnsDoubleSharp{}",
+}
+
+---------------------------------------------------------------------------
+-- Keys and letter names (for --letters, and for key labels)
+---------------------------------------------------------------------------
+
+local LETTERS = { "C", "D", "E", "F", "G", "A", "B" }
+local NATURAL = { C = 0, D = 2, E = 4, F = 5, G = 7, A = 9, B = 11 }
+local MAJOR   = { 0, 2, 4, 5, 7, 9, 11 }
+local MINOR   = { 0, 2, 3, 5, 7, 8, 10 }
+
+local function parse_key(s)
+  s = s:gsub("##", "#")
+  local l, a, m = s:match("^%s*([A-Ga-g])([b#]?)(m?)%s*$")
+  if not l then return nil end
+  l = l:upper()
+  local idx
+  for i, v in ipairs(LETTERS) do if v == l then idx = i end end
+  return {
+    letter = idx,
+    semi = (NATURAL[l] + ACC_OFFSET[a]) % 12,
+    minor = m == "m",
+    acc = ACC_OFFSET[a],
+  }
+end
+
+local function key_label(k)
+  return LETTERS[k.letter] .. ACC_TEX[k.acc] .. (k.minor and "m" or "")
+end
+
+-- Spell scale degree `deg` (1-7) altered by `acc` semitones in key `k`.
+local function spell(k, deg, acc)
+  local li = (k.letter + deg - 2) % 7 + 1
+  local letter = LETTERS[li]
+  local scale = k.minor and MINOR or MAJOR
+  local semi = (k.semi + scale[deg] + acc) % 12
+  local diff = (semi - NATURAL[letter]) % 12
+  if diff > 6 then diff = diff - 12 end
+  if diff < -2 or diff > 2 then return letter .. "?" end
+  return letter .. ACC_TEX[diff]
+end
+
+function M.set_key(s)
+  s = s:gsub("##", "#")
+  local k = parse_key(s)
+  if not k then
+    tex.error(string.format("nns: cannot understand key '%s' (expected e.g. G, Bb, F#, Am)", s))
+    return
+  end
+  M.state.key, M.state.key_src = k, s
+end
+
+-- Prints "<prefix><key>" for the page header, or nothing when no key is set.
+function M.print_key_label(prefix)
+  if M.state.key then out("\\nnsMetaItem{" .. prefix .. key_label(M.state.key) .. "}") end
+end
+
+function M.keychange(s)
+  M.set_key(s)
+  if M.state.key then out("\\nnsKeyChange{" .. key_label(M.state.key) .. "}") end
+end
+
+---------------------------------------------------------------------------
+-- Chords
+---------------------------------------------------------------------------
+
+-- Quality pieces, tried in order at each position of the quality string.
+-- Each maps the matched text to TeX for the superscript.
+local QUALITY_PIECES = {
+  { "^maj",  function() return "maj" end },
+  { "^Δ",    function() return "\\ensuremath{\\Delta}" end },
+  { "^sus",  function() return "sus" end },
+  { "^add",  function() return "add" end },
+  { "^dim",  function() return "°" end },
+  { "^°",    function() return "°" end },
+  { "^ø",    function() return "ø" end },
+  { "^aug",  function() return "+" end },
+  { "^%+",   function() return "+" end },
+  { "^alt",  function() return "alt" end },
+  { "^b",    function() return "\\nnsFlat{}" end },
+  { "^#",    function() return "\\nnsSharp{}" end },
+  { "^%d+",  function(s) return s end },
+  { "^[()]", function(s) return s end },
+}
+
+local function parse_quality(q)
+  local minor = false
+  if q:match("^m") and not q:match("^maj") then
+    minor, q = true, q:sub(2)
+  elseif q:match("^%-") then
+    minor, q = true, q:sub(2)
+  end
+  local sup = {}
+  while #q > 0 do
+    local hit = false
+    for _, p in ipairs(QUALITY_PIECES) do
+      local s = q:match(p[1])
+      if s then
+        sup[#sup + 1] = p[2](s)
+        q = q:sub(#s + 1)
+        hit = true
+        break
+      end
+    end
+    if not hit then return nil end
+  end
+  return minor, table.concat(sup)
+end
+
+local function parse_degree(s)
+  local a, d = s:match("^([b#]?)([1-7])$")
+  if not d then return nil end
+  return { acc = ACC_OFFSET[a], degree = tonumber(d) }
+end
+
+-- Returns a chord table, or nil if `w` is not a chord.
+local function parse_chord(w, suffixes)
+  local push = false
+  if w:sub(1, 1) == "<" then push, w = true, w:sub(2) end
+
+  local mods = {}
+  while #w > 1 and suffixes[w:sub(-1)] do
+    table.insert(mods, 1, suffixes[w:sub(-1)])
+    w = w:sub(1, -2)
+  end
+
+  local main, bass = w:match("^([^/]+)/(.+)$")
+  main = main or w
+  local a, d, q = main:match("^([b#]?)([1-7])(.*)$")
+  if not d then return nil end
+  local minor, sup = parse_quality(q)
+  if minor == nil then return nil end
+  local b
+  if bass then
+    b = parse_degree(bass)
+    if not b then return nil end
+  end
+  return {
+    kind = "chord", push = push, acc = ACC_OFFSET[a], degree = tonumber(d),
+    minor = minor, sup = sup, bass = b, mods = mods,
+  }
+end
+
+local function degree_tex(acc, degree)
+  if M.config.letters and M.state.key then
+    return spell(M.state.key, degree, acc)
+  end
+  return ACC_TEX[acc] .. degree
+end
+
+local function chord_tex(c)
+  local s = degree_tex(c.acc, c.degree)
+  if c.minor then s = s .. "\\nnsMinor{}" end
+  if c.sup ~= "" then s = s .. "\\nnsSup{" .. c.sup .. "}" end
+  if c.bass then s = s .. "\\nnsSlash{" .. degree_tex(c.bass.acc, c.bass.degree) .. "}" end
+  if c.push then s = "\\nnsPush{}" .. s end
+  return s
+end
+
+---------------------------------------------------------------------------
+-- Marks: token pattern -> drawing function.
+--
+--   kind "item"   takes a beat slot in the bar. draw(id, x, y) -> TikZ
+--   kind "mod"    decorates the preceding chord. draw(id, k) -> TikZ,
+--                 where k counts marks already stacked above the chord.
+--                 `suffix` lets the mark be glued onto a chord ("1*").
+--   kind "prefix" applies to the next chord.
+--
+-- Adding a mark = one entry here + (usually) one TikZ style in nnschart.cls.
+---------------------------------------------------------------------------
+
+local function above(id, k, style, body)
+  return string.format("\\node[%s] at ([yshift=%dpt]%s.north) {%s};", style, 2 + 10 * k, id, body or "")
+end
+
+M.marks = {
+  { name = "rest", pattern = "^r$", kind = "item",
+    draw = function(id, x, y)
+      return string.format("\\node[nnsglyph] (%s) at (%s,%s) {\\nnsRest};", id, num(x), num(y))
+    end },
+
+  { name = "tick", pattern = "^/$", kind = "item",
+    draw = function(id, x, y)
+      return string.format("\\node[nnstick] (%s) at (%s,%s) {};", id, num(x), num(y))
+        .. string.format("\\draw[nnstickline] ([shift={(-3pt,-7pt)}]%s.center) -- ([shift={(3pt,7pt)}]%s.center);", id, id)
+    end },
+
+  { name = "diamond", pattern = "^\\diamond$", suffix = "*", kind = "mod", stacks = false,
+    draw = function(id)
+      local c = id .. ".center"
+      return "\\draw[nnsdiamond] let \\p1=($(" .. id .. ".north east)-(" .. c .. ")$) in "
+        .. "($(" .. c .. ")+({-(\\x1+0.8*\\y1+2pt)},0)$) -- "
+        .. "($(" .. c .. ")+(0,{\\y1+\\x1/0.8+2pt})$) -- "
+        .. "($(" .. c .. ")+({\\x1+0.8*\\y1+2pt},0)$) -- "
+        .. "($(" .. c .. ")+(0,{-(\\y1+\\x1/0.8+2pt)})$) -- cycle;"
+    end },
+
+  { name = "stop", pattern = "^!$", suffix = "!", kind = "mod", stacks = true,
+    draw = function(id, k) return above(id, k, "nnsstop") end },
+
+  { name = "accent", pattern = "^%^$", suffix = "^", kind = "mod", stacks = true,
+    draw = function(id, k) return above(id, k, "nnsaccent", "\\nnsAccentGlyph") end },
+
+  { name = "mute", pattern = "^\\mute$", kind = "mod", stacks = true,
+    draw = function(id, k) return above(id, k, "nnsmute") end },
+
+  { name = "push", pattern = "^<$", kind = "prefix",
+    apply = function(chord) chord.push = true end },
+}
+
+local SUFFIXES = {}
+for _, m in ipairs(M.marks) do
+  if m.suffix then SUFFIXES[m.suffix] = m end
+end
+
+local function find_mark(w)
+  for _, m in ipairs(M.marks) do
+    if w:match(m.pattern) then return m end
+  end
+end
+
+---------------------------------------------------------------------------
+-- Lexer
+---------------------------------------------------------------------------
+
+local function lex(s)
+  local toks, i, n = {}, 1, #s
+  local function push(t) toks[#toks + 1] = t end
+  while i <= n do
+    local c = s:sub(i, i)
+    if c:match("%s") then
+      i = i + 1
+    elseif s:sub(i, i + 2) == ":|:" then push { t = "bar", style = "repeat-both" }; i = i + 3
+    elseif s:sub(i, i + 1) == "|:" then push { t = "bar", style = "repeat-start" }; i = i + 2
+    elseif s:sub(i, i + 1) == ":|" then push { t = "bar", style = "repeat-end" }; i = i + 2
+    elseif s:sub(i, i + 1) == "||" then push { t = "bar", style = "double" }; i = i + 2
+    elseif c == "|" then push { t = "bar", style = "single" }; i = i + 1
+    elseif s:match("^%[%d+%.", i) then
+      local d = s:match("^%[(%d+)%.", i)
+      push { t = "ending", n = tonumber(d) }; i = i + #d + 2
+    elseif c == "[" then push { t = "open" }; i = i + 1
+    elseif c == "]" then push { t = "close" }; i = i + 1
+    elseif c == "." then push { t = "dot" }; i = i + 1
+    else
+      local w
+      if c == "\\" then w = s:match("^\\%a+", i) or "\\"
+      else w = s:match("^[^%s|%[%]\\%.]+", i) end
+      push { t = "word", v = w }; i = i + #w
+    end
+  end
+  return toks
+end
+
+---------------------------------------------------------------------------
+-- Parser
+---------------------------------------------------------------------------
+
+local function parse(src)
+  local bars, cur, lastsep, pending_push = {}, nil, "single", false
+  local seps_in_a_row = 0
+
+  local function barno() return M.state.bar + #bars + 1 end
+  local function open_bar()
+    if not cur then cur = { items = {}, groups = {}, left = lastsep } end
+    return cur
+  end
+
+  for _, tok in ipairs(lex(src)) do
+    if tok.t == "bar" then
+      if cur and #cur.items > 0 then
+        if cur.group_open then report(barno(), "unclosed '['"); cur.group_open = nil end
+        cur.right = tok.style
+        bars[#bars + 1] = cur
+        cur = nil
+      elseif cur then
+        report(barno(), "bar has an ending mark but no chords")
+        cur = nil
+      elseif #bars > 0 and seps_in_a_row > 0 then
+        report(barno(), "empty bar")
+      end
+      lastsep = tok.style
+      seps_in_a_row = seps_in_a_row + 1
+    else
+      seps_in_a_row = 0
+      local b = open_bar()
+      if tok.t == "ending" then
+        if #b.items > 0 then report(barno(), "ending '[%d.' must come right after a barline", tok.n)
+        else b.ending = tok.n end
+      elseif tok.t == "open" then
+        if b.group_open then report(barno(), "nested '['")
+        else b.group_open = #b.items + 1 end
+      elseif tok.t == "close" then
+        if not b.group_open then report(barno(), "']' without '['")
+        elseif #b.items < b.group_open then report(barno(), "empty '[ ]'"); b.group_open = nil
+        else
+          b.groups[#b.groups + 1] = { from = b.group_open, to = #b.items }
+          b.group_open = nil
+        end
+      elseif tok.t == "dot" then
+        b.dotted = true
+      else
+        local w = tok.v
+        local m = find_mark(w)
+        if m and m.kind == "item" then
+          b.items[#b.items + 1] = { kind = m.name, mark = m }
+        elseif m and m.kind == "mod" then
+          local prev = b.items[#b.items]
+          if prev and prev.kind == "chord" then
+            prev.mods[#prev.mods + 1] = m
+          else
+            report(barno(), "'%s' must follow a chord", w)
+          end
+        elseif m and m.kind == "prefix" then
+          pending_push = m
+        else
+          local c = parse_chord(w, SUFFIXES)
+          if c then
+            if pending_push then pending_push.apply(c); pending_push = false end
+            b.items[#b.items + 1] = c
+          else
+            report(barno(), "unknown token '%s'", w)
+          end
+        end
+      end
+    end
+  end
+
+  if cur then
+    if #cur.items > 0 then
+      if cur.group_open then report(barno(), "unclosed '['") end
+      cur.right = "single"
+      bars[#bars + 1] = cur
+    else
+      report(barno(), "bar has an ending mark but no chords")
+    end
+  end
+
+  -- Ending spans: from a bar marked [n. up to the first bar that closes with
+  -- a repeat or double bar, the bar before the next ending, or the last bar.
+  local spans = {}
+  for i, b in ipairs(bars) do
+    if b.ending then
+      local j = i
+      while j < #bars do
+        local r = bars[j].right
+        if r == "repeat-end" or r == "repeat-both" or r == "double" or bars[j + 1].ending then break end
+        j = j + 1
+      end
+      local r = bars[j].right
+      spans[#spans + 1] = { n = b.ending, from = i, to = j,
+                            closed = (r == "repeat-end" or r == "repeat-both") }
+    end
+  end
+
+  return bars, spans
+end
+
+---------------------------------------------------------------------------
+-- Renderer
+---------------------------------------------------------------------------
+
+local function barline(x, style, side)
+  local X = num(x)
+  local function line(dx, st)
+    return string.format("\\draw[%s] ([xshift=%spt]%s,%s) -- ([xshift=%spt]%s,%s);",
+      st, num(dx), X, num(BAR_LO), num(dx), X, num(BAR_HI))
+  end
+  local function dots(dx)
+    local s = ""
+    for _, dy in ipairs { -3.5, 3.5 } do
+      s = s .. string.format("\\fill ([shift={(%spt,%spt)}]%s,%s) circle[radius=1.3pt];",
+        num(dx), num(dy), X, num(CHORD_Y))
+    end
+    return s
+  end
+  if style == "repeat-start" and side ~= "right" then
+    return line(1, "nnsthickbar") .. line(4.5, "nnsbarline") .. dots(8)
+  elseif style == "repeat-end" and side ~= "left" then
+    return dots(-8) .. line(-4.5, "nnsbarline") .. line(-1, "nnsthickbar")
+  elseif style == "repeat-both" then
+    local s = ""
+    if side ~= "left" then s = s .. dots(-6) .. line(-2.5, "nnsbarline") end
+    if side ~= "right" then s = s .. line(2.5, "nnsbarline") .. dots(6) end
+    return s
+  elseif style == "double" then
+    if side == "right" then return line(-3, "nnsbarline") .. line(-0.3, "nnsbarline") end
+    if side == "left" then return line(0.3, "nnsbarline") .. line(3, "nnsbarline") end
+    return line(-1.5, "nnsbarline") .. line(1.5, "nnsbarline")
+  end
+  return line(0, "nnsbarline")
+end
+
+local function emit_row(row, per, rowstart, spans)
+  local k = #row
+  local first, last = rowstart, rowstart + k - 1
+
+  local has_ending = false
+  for _, sp in ipairs(spans) do
+    if sp.to >= first and sp.from <= last then has_ending = true end
+  end
+
+  out("\\par\\noindent\\begin{tikzpicture}[x=" .. num(1 / per) .. "\\linewidth,y=10pt,nnsrow]")
+  out(string.format("\\useasboundingbox (0,0) rectangle (%d,%s);", per,
+    num(ROW_H + (has_ending and END_ROOM or 0))))
+  out(string.format("\\coordinate (nnsU) at (0,%s);", num(UNDER_Y)))
+
+  -- barlines
+  out(barline(0, row[1].left, "left"))
+  for j = 1, k - 1 do out(barline(j, row[j].right, "mid")) end
+  out(barline(k, row[k].right, "right"))
+
+  -- contents
+  for j, b in ipairs(row) do
+    local n = #b.items
+    local chords = 0
+    for i, it in ipairs(b.items) do
+      local id = string.format("nns%d-%d", j, i)
+      it.id = id
+      local x = (j - 1) + PAD + (1 - 2 * PAD) * (i - 0.5) / n
+      if it.kind == "chord" then
+        chords = chords + 1
+        out(string.format("\\node[nnschord] (%s) at (%s,%s) {%s};", id, num(x), num(CHORD_Y), chord_tex(it)))
+        local stacked = 0
+        for _, m in ipairs(it.mods) do
+          out(m.draw(id, stacked))
+          if m.stacks then stacked = stacked + 1 end
+        end
+      else
+        out(it.mark.draw(id, x, CHORD_Y))
+      end
+    end
+
+    -- split bars: brackets for [ ] groups, otherwise underline >1 chord
+    if #b.groups > 0 then
+      for _, g in ipairs(b.groups) do
+        out(string.format("\\draw[nnsbracket] (%s.west |- nnsU) ++(0,4pt) |- (%s.east |- nnsU) -- ++(0,4pt);",
+          b.items[g.from].id, b.items[g.to].id))
+      end
+    elseif chords > 1 then
+      out(string.format("\\draw[nnsunder] (%s.west |- nnsU) -- (%s.east |- nnsU);",
+        b.items[1].id, b.items[n].id))
+    end
+  end
+
+  -- endings
+  for _, sp in ipairs(spans) do
+    if sp.to >= first and sp.from <= last then
+      local a = math.max(sp.from, first) - first
+      local z = math.min(sp.to, last) - first + 1
+      local starts, ends = sp.from >= first, sp.to <= last
+      local p = string.format("([xshift=3pt]%d,%s)", a, num(starts and END_LO or END_HI))
+      p = p .. string.format(" -- ([xshift=3pt]%d,%s) -- ([xshift=-3pt]%d,%s)", a, num(END_HI), z, num(END_HI))
+      if ends and sp.closed then p = p .. string.format(" -- ([xshift=-3pt]%d,%s)", z, num(END_LO)) end
+      out("\\draw[nnsending] " .. p .. ";")
+      if starts then
+        out(string.format("\\node[nnsendinglabel] at ([xshift=5pt]%d,%s) {%d.};", a, num(END_HI), sp.n))
+      end
+    end
+  end
+
+  out("\\end{tikzpicture}\\par")
+end
+
+function M.begin_section(name)
+  M.state.section = name
+  M.state.bar = 0
+end
+
+function M.bars(src, per)
+  src = src:gsub("##", "#")
+  per = tonumber(per) or 4
+  if per < 1 then per = 4 end
+  local bars, spans = parse(src)
+  for r = 1, #bars, per do
+    local row = {}
+    for j = r, math.min(r + per - 1, #bars) do row[#row + 1] = bars[j] end
+    emit_row(row, per, r, spans)
+  end
+  M.state.bar = M.state.bar + #bars
+end
+
+-- exported for tests / tooling
+M._parse = parse
+M._parse_chord = function(w) return parse_chord(w, SUFFIXES) end
+M._spell = spell
+M._parse_key = parse_key
+
+return M

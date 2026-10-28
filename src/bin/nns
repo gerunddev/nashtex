@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# nns: build Nashville number charts (songs/*.tex) into PDFs (build/*.pdf).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SONGS="$ROOT/songs"
+BUILD="$ROOT/build"
+
+# Names that would collide with make targets.
+RESERVED=(pdf new list clean doctor install book help all)
+
+# TeX Live packages the class needs, as "package:file-that-proves-it".
+# Only packages whose file kpsewhich cannot already find get installed.
+TEX_PACKAGES=(
+  pgf:tikz.sty
+  fontspec:fontspec.sty
+  luaotfload:luaotfload.sty
+  geometry:geometry.sty
+  xcolor:xcolor.sty
+  graphics:graphicx.sty
+  lm:lmsans10-regular.otf
+  pdfpages:pdfpages.sty
+  eso-pic:eso-pic.sty
+)
+
+die() { printf 'nns: %s\n' "$*" >&2; exit 1; }
+
+# ---- tool resolution -------------------------------------------------------
+# Order: /Library/TeX/texbin (BasicTeX), $(brew --prefix)/bin, PATH.
+
+BREW=""
+for b in /opt/homebrew/bin/brew /usr/local/bin/brew "$(command -v brew 2>/dev/null || true)"; do
+  if [[ -n "$b" && -x "$b" ]]; then BREW="$b"; break; fi
+done
+BREW_PREFIX=""
+[[ -n "$BREW" ]] && BREW_PREFIX="$(dirname "$(dirname "$BREW")")"
+
+resolve() {
+  local tool="$1" d
+  for d in /Library/TeX/texbin ${BREW_PREFIX:+"$BREW_PREFIX/bin"}; do
+    if [[ -x "$d/$tool" ]]; then echo "$d/$tool"; return 0; fi
+  done
+  command -v "$tool" 2>/dev/null || true
+}
+
+LUALATEX="$(resolve lualatex)"
+TLMGR="$(resolve tlmgr)"
+KPSEWHICH="$(resolve kpsewhich)"
+LATEXMK="$(resolve latexmk)"
+
+export TEXMFHOME="$ROOT/.texmf"
+export TEXMFVAR="$ROOT/.texmf-var"
+export TEXINPUTS="$ROOT/src/tex:"
+export LUAINPUTS="$ROOT/src/lua:"
+export OSFONTDIR="$ROOT/src/fonts"
+export NNS_FONTDIR="$ROOT/src/fonts"
+[[ -n "$LUALATEX" ]] && export PATH="$(dirname "$LUALATEX"):$PATH"
+
+# latexmk is not in Homebrew, and tlmgr refuses it in user mode ("not
+# relocatable"). When it isn't on the system, use the single-file copy that
+# `nns install` downloads from CTAN into the project-local tree.
+LATEXMK_URL="https://mirrors.ctan.org/support/latexmk/latexmk.pl"
+latexmk_cmd() {
+  if [[ -n "$LATEXMK" ]]; then
+    echo "$LATEXMK"
+  elif [[ -f "$TEXMFHOME/scripts/latexmk/latexmk.pl" ]]; then
+    echo "perl $TEXMFHOME/scripts/latexmk/latexmk.pl"
+  fi
+}
+
+# ---- helpers ---------------------------------------------------------------
+
+song_name() {
+  local s="${1#songs/}"
+  s="${s%.tex}"
+  [[ "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || die "invalid song name '$1' (use letters, digits, - _ .)"
+  local r
+  for r in "${RESERVED[@]}"; do
+    [[ "$s" == "$r" ]] && die "song name '$s' collides with a make target; choose another name"
+  done
+  echo "$s"
+}
+
+all_songs() {
+  local f
+  for f in "$SONGS"/*.tex; do
+    [[ -e "$f" ]] || continue
+    basename "$f" .tex
+  done
+}
+
+song_title() {
+  local t
+  t="$(grep -o 'title *= *{[^}]*}' "$SONGS/$1.tex" 2>/dev/null | head -1 | sed 's/^title *= *{//; s/}$//')" || true
+  echo "${t:-$1}"
+}
+
+show_errors() {
+  local log="$1"
+  if [[ -f "$log" ]]; then
+    echo "---- errors from $log ----" >&2
+    grep -E -A3 '^(! |[^ ]*:[0-9]+: )' "$log" | head -40 >&2 || tail -20 "$log" >&2
+  fi
+}
+
+# ---- commands --------------------------------------------------------------
+
+cmd_doctor() {
+  local quiet=0 ok=1 v
+  [[ "${1:-}" == "-q" ]] && quiet=1
+  say() { (( quiet )) || printf '%s\n' "$*"; }
+  row() { (( quiet )) || printf '  %-10s %-44s %s\n' "$1" "$2" "$3"; }
+
+  say "nns doctor (repo: $ROOT)"
+  if [[ -n "$BREW" ]]; then row brew "$BREW" "$("$BREW" --version 2>/dev/null | head -1)"
+  else row brew "MISSING" "install Homebrew: https://brew.sh"; ok=0; fi
+
+  if [[ -n "$LUALATEX" ]]; then row lualatex "$LUALATEX" "$("$LUALATEX" --version 2>/dev/null | head -1)"
+  else row lualatex "MISSING" ""; ok=0; fi
+
+  if [[ -n "$TLMGR" ]]; then row tlmgr "$TLMGR" "$("$TLMGR" --version 2>/dev/null | head -1)"
+  else row tlmgr "MISSING" ""; ok=0; fi
+
+  local mk; mk="$(latexmk_cmd)"
+  if [[ -n "$mk" ]]; then
+    v="$($mk -v 2>/dev/null | grep -m1 -i version || true)"
+    row latexmk "$mk" "$v"
+  else row latexmk "MISSING" ""; ok=0; fi
+
+  if [[ -f "$NNS_FONTDIR/Bravura.otf" ]]; then row font "$NNS_FONTDIR/Bravura.otf" ""
+  else row font "MISSING" "src/fonts/Bravura.otf"; ok=0; fi
+
+  if [[ -n "$KPSEWHICH" ]]; then
+    local p missing=()
+    for p in "${TEX_PACKAGES[@]}"; do
+      "$KPSEWHICH" "${p#*:}" >/dev/null 2>&1 || missing+=("${p%%:*}")
+    done
+    if (( ${#missing[@]} )); then row packages "MISSING: ${missing[*]}" ""; ok=0
+    else row packages "ok" "TEXMFHOME=$TEXMFHOME"; fi
+  fi
+
+  if (( ok )); then say "all good"; return 0; fi
+  echo "nns: missing dependencies; run \`make install\`" >&2
+  return 1
+}
+
+cmd_install() {
+  [[ -n "$BREW" ]] || die "Homebrew is required: https://brew.sh"
+  echo "==> brew bundle"
+  "$BREW" bundle --file="$ROOT/Brewfile"
+
+  TLMGR="$(resolve tlmgr)"; KPSEWHICH="$(resolve kpsewhich)"
+  [[ -n "$TLMGR" ]] || die "tlmgr not found after installing BasicTeX (expected /Library/TeX/texbin/tlmgr)"
+  export PATH="$(dirname "$TLMGR"):$PATH"
+
+  mkdir -p "$TEXMFHOME" "$TEXMFVAR"
+  if [[ ! -d "$TEXMFHOME/tlpkg" ]]; then
+    echo "==> tlmgr --usermode init-usertree ($TEXMFHOME)"
+    "$TLMGR" --usermode init-usertree
+  fi
+
+  local p need=()
+  for p in "${TEX_PACKAGES[@]}"; do
+    "$KPSEWHICH" "${p#*:}" >/dev/null 2>&1 || need+=("${p%%:*}")
+  done
+  if (( ${#need[@]} )); then
+    echo "==> tlmgr --usermode install ${need[*]}"
+    "$TLMGR" --usermode install "${need[@]}"
+  else
+    echo "==> TeX packages already present"
+  fi
+
+  if [[ -z "$(latexmk_cmd)" ]]; then
+    echo "==> latexmk -> $TEXMFHOME/scripts/latexmk/latexmk.pl"
+    mkdir -p "$TEXMFHOME/scripts/latexmk"
+    curl -fsSL -o "$TEXMFHOME/scripts/latexmk/latexmk.pl" "$LATEXMK_URL" \
+      || die "could not download latexmk from $LATEXMK_URL"
+  fi
+  cmd_doctor
+}
+
+cmd_build() {
+  local letters=0 names=() s
+  while (( $# )); do
+    case "$1" in
+      --letters) letters=1 ;;
+      --all) while IFS= read -r s; do names+=("$s"); done < <(all_songs) ;;
+      -*) die "unknown option: $1" ;;
+      *) names+=("$(song_name "$1")") ;;
+    esac
+    shift
+  done
+  (( ${#names[@]} )) || die "usage: nns build [--letters] <song>... | --all"
+  cmd_doctor -q || exit 1
+
+  local mk fail=0; mk="$(latexmk_cmd)"
+  mkdir -p "$BUILD"
+  for s in "${names[@]}"; do
+    [[ -f "$SONGS/$s.tex" ]] || { echo "nns: no such song: songs/$s.tex (see \`make list\`)" >&2; fail=1; continue; }
+    local job="$s"; (( letters )) && job="$s-letters"
+    if (cd "$ROOT" && NNS_LETTERS=$letters $mk -lualatex -interaction=nonstopmode -halt-on-error \
+          -file-line-error -outdir=build -jobname="$job" "songs/$s.tex" >"$BUILD/$job.latexmk.out" 2>&1); then
+      echo "build/$job.pdf"
+    else
+      echo "nns: build failed: songs/$s.tex" >&2
+      show_errors "$BUILD/$job.log"
+      fail=1
+    fi
+  done
+  return $fail
+}
+
+cmd_book() {
+  local songs=() s
+  while IFS= read -r s; do [[ "$s" == _* ]] || songs+=("$s"); done < <(all_songs)
+  (( ${#songs[@]} )) || die "no songs to bind"
+  cmd_build "${songs[@]}" >/dev/null || die "fix the song errors above before building the book"
+
+  local tex="$BUILD/book.tex"
+  {
+    echo '\documentclass{article}'
+    echo '\usepackage[letterpaper,margin=1in]{geometry}'
+    echo '\usepackage{pdfpages}'
+    echo '\usepackage{fontspec}\setmainfont{lmsans10-regular.otf}[BoldFont=lmsans10-bold.otf]'
+    echo '\renewcommand\contentsname{Songs}'
+    echo '\begin{document}'
+    echo '\tableofcontents'
+    for s in "${songs[@]}"; do
+      local t; t="$(song_title "$s" | sed 's/[&%$#_]/\\&/g')"
+      echo "\\includepdf[pages=-,addtotoc={1,section,1,{$t},song:$s}]{build/$s.pdf}"
+    done
+    echo '\end{document}'
+  } >"$tex"
+
+  local mk; mk="$(latexmk_cmd)"
+  if (cd "$ROOT" && $mk -lualatex -interaction=nonstopmode -halt-on-error -file-line-error \
+        -outdir=build build/book.tex >"$BUILD/book.latexmk.out" 2>&1); then
+    echo "build/book.pdf"
+  else
+    show_errors "$BUILD/book.log"; exit 1
+  fi
+}
+
+cmd_new() {
+  (( $# )) || die "usage: nns new <song>"
+  local s f title
+  for s in "$@"; do
+    s="$(song_name "$s")"; f="$SONGS/$s.tex"
+    [[ -e "$f" ]] && die "songs/$s.tex already exists"
+    title="$(echo "$s" | tr '_-' '  ' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)} 1')"
+    mkdir -p "$SONGS"
+    cat >"$f" <<EOF
+\\documentclass{nnschart}
+\\songinfo{title={$title}, key=C, tempo=100, time=4/4}
+\\begin{document}
+\\begin{section}{Intro}
+  \\bars{ | 1 | 4 | 1 | 5 | }
+\\end{section}
+\\begin{section}{Verse}
+  \\bars{ | 1 | 1 | 4 | 4 | 6m | 4 | 5 | 5 | }
+\\end{section}
+\\begin{section}{Chorus}
+  \\bars{ | 4 | 5 | 6m | 1/3 | 4 | 5 | 1* | 1* | }
+\\end{section}
+\\end{document}
+EOF
+    echo "songs/$s.tex"
+  done
+}
+
+cmd_list() {
+  local s
+  while IFS= read -r s; do printf '%-28s %s\n' "$s" "$(song_title "$s")"; done < <(all_songs)
+}
+
+cmd_clean() { rm -rf "$BUILD"; echo "removed build/"; }
+
+usage() {
+  cat <<'EOF'
+usage: nns <command> [args]
+
+  build [--letters] <song>...   build songs/<song>.tex -> build/<song>.pdf
+  build --all                   build every song
+  book                          bind all songs (except _*) into build/book.pdf
+  new <song>                    scaffold songs/<song>.tex
+  list                          list songs
+  clean                         remove build/
+  doctor                        show resolved tools; fail if any are missing
+  install                       brew bundle + project-local TeX packages
+EOF
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  build)   cmd_build "$@" ;;
+  book)    cmd_book "$@" ;;
+  new)     cmd_new "$@" ;;
+  list)    cmd_list ;;
+  clean)   cmd_clean ;;
+  doctor)  cmd_doctor "$@" ;;
+  install) cmd_install ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
