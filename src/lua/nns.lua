@@ -187,9 +187,16 @@ local function parse_chord(w, suffixes)
   local push = false
   if w:sub(1, 1) == "<" then push, w = true, w:sub(2) end
 
-  local mods = {}
+  local mods, beats = {}, 0
   while #w > 1 and suffixes[w:sub(-1)] do
-    table.insert(mods, 1, suffixes[w:sub(-1)])
+    local m = suffixes[w:sub(-1)]
+    if m.name == "beats" then
+      -- one mod draws all the ticks; count the apostrophes
+      if beats == 0 then table.insert(mods, 1, m) end
+      beats = beats + 1
+    else
+      table.insert(mods, 1, m)
+    end
     w = w:sub(1, -2)
   end
 
@@ -206,7 +213,7 @@ local function parse_chord(w, suffixes)
   end
   return {
     kind = "chord", push = push, acc = ACC_OFFSET[a], degree = tonumber(d),
-    minor = minor, sup = sup, bass = b, mods = mods,
+    minor = minor, sup = sup, bass = b, mods = mods, beats = beats,
   }
 end
 
@@ -272,6 +279,18 @@ M.marks = {
 
   { name = "mute", pattern = "^\\mute$", kind = "mod", stacks = true,
     draw = function(id, k) return above(id, k, "nnsmute") end },
+
+  -- Beat count over a chord in a split bar: 4''' . 6m' (6m lands on beat 4).
+  { name = "beats", pattern = "^'+$", suffix = "'", kind = "mod", stacks = true,
+    draw = function(id, k, chord)
+      local out = {}
+      for i = 1, chord.beats do
+        out[#out + 1] = string.format(
+          "\\draw[nnsbeat] ([xshift=%.1fpt,yshift=%dpt]%s.north) -- ++(1.2pt,5pt);",
+          (i - (chord.beats + 1) / 2) * 3.5 - 0.6, 3 + 10 * k, id)
+      end
+      return table.concat(out)
+    end },
 
   { name = "push", pattern = "^<$", kind = "prefix",
     apply = function(chord) chord.push = true end },
@@ -374,7 +393,10 @@ local function parse(src)
           b.items[#b.items + 1] = { kind = m.name, mark = m }
         elseif m and m.kind == "mod" then
           local prev = b.items[#b.items]
-          if prev and prev.kind == "chord" then
+          if prev and prev.kind == "chord" and m.name == "beats" then
+            if prev.beats == 0 then prev.mods[#prev.mods + 1] = m end
+            prev.beats = prev.beats + #w
+          elseif prev and prev.kind == "chord" then
             prev.mods[#prev.mods + 1] = m
           else
             report(barno(), "'%s' must follow a chord", w)
@@ -500,7 +522,7 @@ local function emit_row(row, rowstart, spans)
         out(string.format("\\node[nnschord] (%s) at %s {%s};", id, here, chord_tex(it)))
         local stacked = 0
         for _, md in ipairs(it.mods) do
-          out(md.draw(id, stacked))
+          out(md.draw(id, stacked, it))
           if md.stacks then stacked = stacked + 1 end
         end
       else

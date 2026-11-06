@@ -87,6 +87,7 @@
   nnsmute/.style={regular polygon,regular polygon sides=3,draw,line width=0.9pt,
     inner sep=0pt,minimum size=10pt,anchor=south},
   nnsaccent/.style={inner sep=0pt,font=\nnsChordFont,anchor=south},
+  nnsbeat/.style={line width=1pt,line cap=round},
   nnsending/.style={line width=0.8pt},
   nnsendinglabel/.style={anchor=north west,inner sep=2pt,font=\small\bfseries},
   nnssection/.style={draw,line width=0.9pt,rounded corners=1.5pt,inner sep=3pt,

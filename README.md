@@ -74,6 +74,7 @@ the number of measures per line for the whole song.
 | Diamond | `1*` or `1 \diamond` | |
 | Split bar | `4 . 5` or `4 5` (underlined), `[4 5]` (bracketed) | `1 [4 5]` brackets part of a bar |
 | Beat ticks | `1 / / /` | |
+| Beats over a chord | `4''' . 6m'` | One tick per beat, drawn above the chord |
 | Rest | `r` | |
 | Stop / accent | `5!` or `5 !`, `4^` or `4 ^` | |
 | Mute | `1 \mute` | Triangle above the chord |
