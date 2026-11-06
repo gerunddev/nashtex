@@ -1,13 +1,107 @@
 # nns: Nashville Number System charts
 
-Nashville number charts as plain-text LaTeX, built to PDF with one command:
+Write chord charts and melodies as plain text, in numbers instead of letter
+names, and build them into clean, printable PDFs with one command.
 
 ```
-make pdf name-of-song     # -> build/name-of-song.pdf
+make pdf front-porch     # -> build/front-porch.pdf
 ```
 
-Nashville charts, with optional jianpu (numbered) melody lines. No lyrics, no
-tablature. macOS only.
+![A complete chart: chord sections in Nashville numbers, intro and solo as jianpu melody lines](docs/images/front-porch.png)
+
+## The idea: everything is a scale degree
+
+Most chord charts are written in letters (G, C, D, Em). Change the key and
+every symbol on the page changes with it. This project writes music the way
+session players in Nashville do: as **scale degrees of the key**. In the key
+of G, G is `1`, C is `4`, D is `5`, Em is `6m`. Move the song to A and the
+chart doesn't change at all; only the key in the header does.
+
+The same idea works for melodies. **Jianpu** (简谱, "simplified notation") is
+a numbered musical notation, widely used in China and across East Asia,
+where each note is a digit 1 to 7 for its degree in the key. Put the two
+together and a chart's chords *and* its lead lines share one number system:
+a `5` in the melody is the root of the `5` chord above it.
+
+### Nashville numbers
+
+Each number is one bar of that chord. A chart reads left to right like text,
+with section labels and only the marks a band needs.
+
+```latex
+\songinfo{title={Name of Song}, key=G, tempo=92, time=4/4}
+\begin{section}{Verse}
+  \bars{ | 1 | 4 . 5 | <6m | 4 | }
+\end{section}
+\keychange{A}
+\begin{section}{Chorus}
+  \bars{ |: 1 | <4 | [1. 5 | 1* :|[2. 5 | 1 || }
+\end{section}
+```
+
+| As written (numbers) | Built with `LETTERS=1` |
+|:---:|:---:|
+| <img src="docs/images/nashville.png" alt="Nashville number chart" width="300"> | <img src="docs/images/letters.png" alt="The same chart in chord letters" width="300"> |
+
+- `4 . 5`: two chords sharing a bar, underlined.
+- `<6m`: a push; the chord arrives just before the bar line.
+- `1*`: a diamond; strike the chord and let it ring.
+- `|:` `:|` `[1.` `[2.`: repeats and first and second endings.
+- `\keychange{A}`: the numbers carry on unchanged in the new key.
+
+Building with `LETTERS=1` spells every chord out in the song's key, for
+players who read letters. The source never changes.
+
+### Jianpu melody lines
+
+A section can show its lead line in jianpu, with the Nashville chords pinned
+above the notes where they change.
+
+```latex
+\begin{section}{Melody}
+  \melody{ [1] 3 3 4 5 | [5] 5 4 3 2 | [1] 1 1 2 3 | [5] 3. 2/ 2 - |
+           [1] 3 3 4 5 | [5] 5 4 3 2 | [1] 1 1 2 3 | [5] 2. [1] 1/ 1 - || }
+\end{section}
+```
+
+![Ode to Joy in jianpu with Nashville chords above](docs/images/jianpu.png)
+
+How to read it:
+
+- **Digits** are scale degrees: `1` is the key's tonic (do), `5` is the
+  fifth (sol). `b7` and `#4` are altered degrees.
+- **Dots** move a note an octave: above for higher (`1'`), below for lower
+  (`5,`).
+- **Length**: a plain digit is one beat. An underline halves it (`2/` is an
+  eighth note), a dot after it adds half again (`3.`), and each dash holds
+  it one more beat (`2 -`).
+- **`0`** is a rest. **Chords** above the line change on the note beneath
+  them.
+
+Melodies can also tie notes across bars, stack notes, and run several voices
+in parallel (soprano and bass, say), all lined up on one beat grid. The
+[Front Porch](songs/front-porch.tex) chart above mixes both: its intro and
+solo are guitar lines in jianpu, and the rest is Nashville chord bars.
+
+### What you get
+
+- **Plain-text source**: one `.tex` file per song, easy to diff and keep in
+  git.
+- **One-command builds**: `make pdf <song>` builds a song, `make pdf` builds
+  them all, and `make book` binds them into a songbook with a table of
+  contents.
+- **Key-independent charts**: change `key=` and nothing else, or print
+  letters with `LETTERS=1`.
+- **Mistakes caught at build time**: a bar that doesn't add up, an unknown
+  chord or a stray mark stops the build with the section, bar and voice
+  named.
+- **Songbook layout**: a running head with key, tempo, time and feel, two
+  columns, and sections that never split across a column or page.
+
+Chord charts and lead lines only: no lyrics, no standard notation. macOS
+only.
+
+# Usage
 
 ## Setup
 
@@ -40,6 +134,8 @@ single script), and font caches go in `.texmf-var/`. Bravura (SIL OFL, see
 
 The Makefile is a thin wrapper; `src/bin/nns` does the work and can be run
 directly (`src/bin/nns build hello`, `src/bin/nns help`).
+
+# Syntax
 
 ## Song format
 
@@ -124,6 +220,8 @@ Rows hold as many bars as fit the column (at most `barsperrow`).
 `\nnsset{repeatchords=false}` hides a chord that repeats the one before it.
 The design is in `melody-plan.md`.
 
+# Implementation
+
 ## Layout
 
 ```
@@ -136,4 +234,10 @@ tests/                 texlua unit tests (`make test`)
 src/fonts/             Bravura.otf + OFL.txt
 songs/                 one .tex per song
 build/                 output (gitignored)
+docs/images/           README images, built from the examples above
 ```
+
+Charts are parsed and laid out in Lua (`nns.lua` for chord bars,
+`nnsmelody.lua` for melodies) and drawn with TikZ inside LuaLaTeX; there are
+no other dependencies. The design of the melody feature, and the reasons
+behind it, are in `melody-plan.md`.
