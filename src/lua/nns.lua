@@ -579,9 +579,22 @@ end
 function M.begin_section(name)
   M.state.section = name
   M.state.bar = 0
+  M.state.kind = nil
+end
+
+-- A section holds chord bars or a melody, not both: a melody carries its
+-- own chords.
+function M.claim_section(kind)
+  local other = M.state.kind
+  if other and other ~= kind then
+    tex.error(string.format("nns: section '%s' has both \\bars and \\melody; use one per section",
+      M.state.section), { "A melody's [chord] tokens replace the section's chord bars." })
+  end
+  M.state.kind = kind
 end
 
 function M.bars(src, per)
+  M.claim_section("bars")
   src = src:gsub("##", "#")
   per = tonumber(per) or 4
   if per < 1 then per = 4 end
@@ -593,6 +606,11 @@ function M.bars(src, per)
   end
   M.state.bar = M.state.bar + #bars
 end
+
+-- shared with nnsmelody.lua
+M.out = out
+M.chord_tex = chord_tex
+M.parse_chord_symbol = function(w) return parse_chord(w:gsub("##", "#"), SUFFIXES) end
 
 -- exported for tests / tooling
 M._parse = parse

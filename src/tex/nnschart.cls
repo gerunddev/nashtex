@@ -31,7 +31,7 @@
 \RequirePackage{tikz}
 \usetikzlibrary{calc,shapes.geometric}
 
-\directlua{nns = require("nns")}
+\directlua{nns = require("nns"); nnsmelody = require("nnsmelody")}
 
 \setlength\parindent{0pt}
 \setlength\parskip{0pt}
@@ -54,6 +54,9 @@
 \newcommand\nns@smufl[1]{{\nns@smuflfont\char"#1\relax}}
 
 \newcommand\nnsChordFont{\nns@chordfamily\fontsize{20}{24}\selectfont}
+% jianpu melody digits and the chord labels above them
+\newcommand\nnsMelodyFont{\nns@chordfamily\fontsize{13}{16}\selectfont}
+\newcommand\nnsMelodyChordFont{\nns@chordfamily\fontsize{16}{18}\selectfont}
 
 % ---- glyphs used in chord labels and marks --------------------------------
 \newcommand\nnsFlat{\raisebox{0.18em}{\nns@smufl{E260}}\kern0.03em}
@@ -92,6 +95,14 @@
   nnsendinglabel/.style={anchor=north west,inner sep=2pt,font=\small\bfseries},
   nnssection/.style={draw,line width=0.9pt,rounded corners=1.5pt,inner sep=3pt,
     font=\large\bfseries},
+  nnsmnote/.style={inner sep=0pt,anchor=base west,font=\nnsMelodyFont},
+  nnsmacc/.style={inner sep=0pt,anchor=base east,font=\nnsMelodyFont},
+  nnsmdot/.style={},
+  nnsmchord/.style={inner sep=0pt,anchor=base west,font=\nnsMelodyChordFont},
+  nnsmlabel/.style={inner sep=0pt,anchor=base west,font=\small\bfseries},
+  nnsmbeam/.style={line width=0.9pt},
+  nnsmdash/.style={line width=1.3pt},
+  nnsmtie/.style={line width=0.7pt},
   nnskeychange/.style={fill=black!8,draw=black!60,rounded corners=1.5pt,
     inner sep=3pt,font=\bfseries},
 }
@@ -104,9 +115,11 @@
 \newcommand\nns@time{}
 \newcommand\nns@feel{}
 \newcommand\nns@barsperrow{4}
+\newcommand\nns@repeatchords{true}
 \pgfkeys{
   /nns/.is family, /nns,
   barsperrow/.store in=\nns@barsperrow,
+  repeatchords/.store in=\nns@repeatchords,
   title/.store in=\nns@title,
   artist/.store in=\nns@artist,
   book/.store in=\nns@book,
@@ -169,6 +182,22 @@
 \NewDocumentCommand\bars{O{}m}{%
   \begingroup\nnsset{#1}%
   \directlua{nns.bars("\luaescapestring{\detokenize{#2}}", "\nns@barsperrow")}%
+  \endgroup}
+
+% \melody[barsperrow=2]{ [1] 3 3 4 5 | [5] 5 4 3 2 || }
+% A jianpu lead line with its chords; see melody-plan.md and README.md.
+\newlength\nns@digitw
+\newlength\nns@digith
+\newlength\nns@chordw
+\NewDocumentCommand\melody{O{}m}{%
+  \begingroup\nnsset{#1}%
+  \settowidth\nns@digitw{\nnsMelodyFont 0}\settoheight\nns@digith{\nnsMelodyFont 0}%
+  \settowidth\nns@chordw{\nnsMelodyChordFont 0}%
+  \directlua{nnsmelody.render("\luaescapestring{\detokenize{#2}}", {
+    time = "\luaescapestring{\nns@time}", per = "\nns@barsperrow",
+    width = "\the\linewidth", repeatchords = "\nns@repeatchords",
+    digit_w = "\the\nns@digitw", digit_h = "\the\nns@digith",
+    chord_w = "\the\nns@chordw"})}%
   \endgroup}
 
 % Each row of chords is a TikZ picture at its natural width, left-aligned;

@@ -7,7 +7,7 @@ SONGS="$ROOT/songs"
 BUILD="$ROOT/build"
 
 # Names that would collide with make targets.
-RESERVED=(pdf new list clean doctor install book help all)
+RESERVED=(pdf new list clean doctor install book help all test)
 
 # TeX Live packages the class needs, as "package:file-that-proves-it".
 # Only packages whose file kpsewhich cannot already find get installed.
@@ -47,6 +47,7 @@ LUALATEX="$(resolve lualatex)"
 TLMGR="$(resolve tlmgr)"
 KPSEWHICH="$(resolve kpsewhich)"
 LATEXMK="$(resolve latexmk)"
+TEXLUA="$(resolve texlua)"
 
 export TEXMFHOME="$ROOT/.texmf"
 export TEXMFVAR="$ROOT/.texmf-var"
@@ -275,6 +276,11 @@ cmd_list() {
 
 cmd_clean() { rm -rf "$BUILD"; echo "removed build/"; }
 
+cmd_test() {
+  [[ -n "$TEXLUA" ]] || die "texlua not found (run \`make install\`)"
+  "$TEXLUA" "$ROOT/tests/melody_test.lua"
+}
+
 usage() {
   cat <<'EOF'
 usage: nns <command> [args]
@@ -285,6 +291,7 @@ usage: nns <command> [args]
   new <song>                    scaffold songs/<song>.tex
   list                          list songs
   clean                         remove build/
+  test                          run the melody unit tests
   doctor                        show resolved tools; fail if any are missing
   install                       brew bundle + project-local TeX packages
 EOF
@@ -297,6 +304,7 @@ case "$cmd" in
   new)     cmd_new "$@" ;;
   list)    cmd_list ;;
   clean)   cmd_clean ;;
+  test)    cmd_test ;;
   doctor)  cmd_doctor "$@" ;;
   install) cmd_install ;;
   help|-h|--help) usage ;;

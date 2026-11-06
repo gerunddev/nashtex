@@ -1,6 +1,6 @@
 # Thin wrapper around src/bin/nns; all logic lives there.
 NNS     := src/bin/nns
-TARGETS := pdf new list clean doctor install book help all
+TARGETS := pdf new list clean doctor install book help all test
 
 .DEFAULT_GOAL := help
 .PHONY: $(TARGETS)
@@ -39,13 +39,16 @@ book:
 clean:
 	@$(NNS) clean
 
+test:
+	@$(NNS) test
+
 doctor:
 	@$(NNS) doctor
 
 install:
 	@$(NNS) install
 
-build/%.pdf: songs/%.tex src/tex/nnschart.cls src/lua/nns.lua
+build/%.pdf: songs/%.tex src/tex/nnschart.cls src/lua/nns.lua src/lua/nnsmelody.lua
 	@$(NNS) build $*
 
 ifneq ($(ARGS),)
