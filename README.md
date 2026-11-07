@@ -1,6 +1,6 @@
-# nns: Nashville Number System charts
+# Nashville LaTeX
 
-Write chord charts and melodies as plain text, in numbers instead of letter
+Write chord charts and melodies as latex files, in numbers instead of letter
 names, and build them into clean, printable PDFs with one command.
 
 ```
