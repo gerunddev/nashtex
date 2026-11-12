@@ -157,6 +157,8 @@ There are no measure lines: each chord is a measure, measures are spaced like
 words, and chords that share a measure sit closer together and are
 underlined. Each line holds `barsperrow` measures (default 4).
 
+`tempo=` is beats per minute: per quarter note, or per dotted quarter in
+compound time (6/8, 9/8, 12/8), and the header shows which.
 `\songinfo` also takes `artist=` (shown in the footer), `feel=`, and `book=`
 (a songbook name for the running head). `\nnsset{barsperrow=N}` changes
 the number of measures per line for the whole song.

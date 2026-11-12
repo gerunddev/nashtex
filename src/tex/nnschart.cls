@@ -71,6 +71,15 @@
 \newcommand\nnsTickBox{}
 \newcommand\nnsAccentGlyph{\scalebox{1.6}{\nns@smufl{E4AC}}}
 \newcommand\nnsNoteGlyph{\raisebox{0.1em}{\scalebox{0.9}{\nns@smufl{ECA5}}}}
+\newcommand\nnsDottedNoteGlyph{\raisebox{0.1em}{\scalebox{0.9}{\nns@smufl{ECA5}\,\nns@smufl{ECB7}}}}
+% The tempo's beat: a dotted quarter in compound time (6/8, 9/8, 12/8),
+% otherwise a quarter.
+\newcommand\nns@beatglyph{%
+  \ifnum\directlua{
+    local n, d = ("\luaescapestring{\nns@time}"):match("^ *([0-9]+) */ *([0-9]+)")
+    n = tonumber(n)
+    tex.sprint((d == "8" and n and n > 3 and n == 3 * math.floor(n / 3)) and 1 or 0)}=1
+    \nnsDottedNoteGlyph\else\nnsNoteGlyph\fi}
 
 % ---- TikZ styles for the grid ---------------------------------------------
 \tikzset{
@@ -143,7 +152,7 @@
 \newcommand\nns@meta{%
   \nns@firstmetatrue
   \ifx\nns@keylabel\@empty\else\nnsMetaItem{Key: \nns@keylabel}\fi
-  \ifx\nns@tempo\@empty\else\nnsMetaItem{\nnsNoteGlyph\,=\,\nns@tempo}\fi
+  \ifx\nns@tempo\@empty\else\nnsMetaItem{\nns@beatglyph\,=\,\nns@tempo}\fi
   \ifx\nns@time\@empty\else\nnsMetaItem{\nns@time}\fi
   \ifx\nns@feel\@empty\else\nnsMetaItem{\nns@feel}\fi}
 \newcommand\nns@ruled[2]{% #1 above the rule (head) or #2 below it (foot)
